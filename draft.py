@@ -5,13 +5,186 @@ from pygame.locals import *
 import numpy as np
 
 
+class GridWorldEnv(gym.Env):
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
+
+    def __init__(self, render_mode="human", size=6):
+        self.size = size  # The size of the square grid
+        self.window_size = 512  # The size of the PyGame window
+
+        # Observations are dictionaries with the agent's and the target's location.
+        # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
+        self.observation_space = spaces.Dict(
+            {
+                "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+            }
+        )
+
+        # We have 4 actions, corresponding to "right", "up", "left", "down", "right"
+        self.action_space = spaces.Discrete(4)
+
+        """
+        The following dictionary maps abstract actions from `self.action_space` to 
+        the direction we will walk in if that action is taken.
+        I.e. 0 corresponds to "right", 1 to "up" etc.
+        """
+        self._action_to_direction = {
+            0: np.array([1, 0]),
+            1: np.array([0, 1]),
+            2: np.array([-1, 0]),
+            3: np.array([0, -1]),
+        }
+
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
+        """
+        If human-rendering is used, `self.window` will be a reference
+        to the window that we draw to. `self.clock` will be a clock that is used
+        to ensure that the environment is rendered at the correct framerate in
+        human-mode. They will remain `None` until human-mode is used for the
+        first time.
+        """
+        self.window = None
+        self.clock = None
+
+    def _get_obs(self):
+        return {"agent": self._agent_location, "target": self._target_location}
+
+    def _get_info(self):
+        return {
+            "distance": np.linalg.norm(
+                self._agent_location - self._target_location, ord=1
+            )
+        }
+
+    def reset(self, seed=None, options=None):
+        # We need the following line to seed self.np_random
+        super().reset(seed=seed)
+
+        # Choose the agent's location uniformly at random
+        self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
+
+        # We will sample the target's location randomly until it does not coincide with the agent's location
+        self._target_location = self._agent_location
+        while np.array_equal(self._target_location, self._agent_location):
+            self._target_location = self.np_random.integers(
+                0, self.size, size=2, dtype=int
+            )
+
+        observation = self._get_obs()
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self._render_frame()
+
+        return observation, info
+
+    def step(self, action):
+        # Map the action (element of {0,1,2,3}) to the direction we walk in
+        direction = self._action_to_direction[action]
+        # We use `np.clip` to make sure we don't leave the grid
+        self._agent_location = np.clip(
+            self._agent_location + direction, 0, self.size - 1
+        )
+        # An episode is done iff the agent has reached the target
+        terminated = np.array_equal(self._agent_location, self._target_location)
+        reward = 1 if terminated else 0  # Binary sparse rewards
+        observation = self._get_obs()
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self._render_frame()
+
+        return observation, reward, terminated, False, info
+
+    def render(self):
+        if self.render_mode == "rgb_array":
+            return self._render_frame()
+
+    def _render_frame(self):
+        if self.window is None and self.render_mode == "human":
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode((self.window_size, self.window_size))
+        if self.clock is None and self.render_mode == "human":
+            self.clock = pygame.time.Clock()
+
+        canvas = pygame.Surface((self.window_size, self.window_size))
+        canvas.fill((255, 255, 255))
+        pix_square_size = (
+            self.window_size / self.size
+        )  # The size of a single grid square in pixels
+
+        # First we draw the target
+        pygame.draw.rect(
+            canvas,
+            (255, 0, 0),
+            pygame.Rect(
+                pix_square_size * self._target_location,
+                (pix_square_size, pix_square_size),
+            ),
+        )
+        # Now we draw the agent
+        pygame.draw.circle(
+            canvas,
+            (0, 0, 255),
+            (self._agent_location + 0.5) * pix_square_size,
+            pix_square_size / 3,
+        )
+
+        # Finally, add some gridlines
+        for x in range(self.size + 1):
+            pygame.draw.line(
+                canvas,
+                0,
+                (0, pix_square_size * x),
+                (self.window_size, pix_square_size * x),
+                width=3,
+            )
+            pygame.draw.line(
+                canvas,
+                0,
+                (pix_square_size * x, 0),
+                (pix_square_size * x, self.window_size),
+                width=3,
+            )
+
+        if self.render_mode == "human":
+            # The following line copies our drawings from `canvas` to the visible window
+            self.window.blit(canvas, canvas.get_rect())
+            pygame.event.pump()
+            pygame.display.update()
+
+            # We need to ensure that human-rendering occurs at the predefined framerate.
+            # The following line will automatically add a delay to keep the framerate stable.
+            self.clock.tick(self.metadata["render_fps"])
+        else:  # rgb_array
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
+            )
+
+    def close(self):
+        if self.window is not None:
+            pygame.display.quit()
+            pygame.quit()
+''
+import gymnasium as gym
+from gymnasium import spaces
+import random 
+import pygame
+from pygame.locals import *
+import numpy as np
+
+
 
 class GridWorldEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
     def __init__(self, render_mode="rgb_array", size=6):
         self.size_rows = size  # The size of the square grid
-        self.size_cols = size 
+        self.size_cols = size + 1
         #self.window_size = 512  # The size of the PyGame window
         self.window_width = (self.size_cols*100)
         self.window_height = self.size_rows*100
@@ -78,6 +251,7 @@ class GridWorldEnv(gym.Env):
                 'prev_agent_loc': np.copy(self._agent_location),
                 'prev_target_loc': np.copy(self._target_location)
             }
+    
         return self._cached_distances
 
 
@@ -130,7 +304,7 @@ class GridWorldEnv(gym.Env):
         # Gather the current state and information
         observation = self._get_obs()
         info = self._get_info()
-        reward = -1
+        reward = 0
         
         # Initialize reward and check if the episode has terminated
         
@@ -143,29 +317,48 @@ class GridWorldEnv(gym.Env):
         #Handle agent movemnt
         if action in [0, 1, 2, 3]:  # Actions for moving the agent
             self._agent_location = self.move_object(self._agent_location, direction, boundary)
+            reward = -1
             if self._target_picked_up:  # Move the target as well if it's picked up
                 self._target_location = self.move_object(self._target_location, direction, boundary)
-                
+                reward = 1
 
 
         #Handle picking up the block
         if action == 4:
             if np.array_equal(self._agent_location, self._target_location) and not self._target_picked_up:
                 self._target_picked_up = True
+                reward = 3
                 print("Picked action 4")
             else:
-                reward = -6  # Optionally, penalize unnecessary pick-up attempts
+                reward = -5  # Optionally, penalize unnecessary pick-up attempts
 
         #Handle dropping off the block
         if action == 5:
-            if np.array_equal(self._agent_location, self._target_location) and self._target_picked_up and terminated:
-                self._target_picked_up = False
-                print("Picked action 5")
-                print("Success: Target dropped off at destination. Terminating episode.")
-                reward = 20
-            else:
-                reward = -1
+                if np.array_equal(self._agent_location, self._target_location):
+                    self._target_picked_up = False
+                    print("Picked action 5")
+                    if terminated:
+                        print("Success: Target dropped off at destination. Terminating episode.")
+                        reward = 10
+                    else:
+                        reward = -2
+                else:
 
+                    reward = -2  # Optionally, penalize unnecessary drop-off attempts
+
+        # Calculate distance-based reward or penalty
+                    
+           
+        #if not self._target_picked_up:
+            # Penalize based on distance to target when the target is not picked up
+            #distance_penalty = info['distance_to_target']*0.5
+            #reward = -distance_penalty 
+        #if self._target_picked_up:
+            # Penalize based on distance to destination when the target is picked up
+            #distance_penalty = info['distance_to_goal']*0.5  # Use distance to goal here
+            #reward = -distance_penalty 
+
+        #reward 
 
         # Render if in human mode
         if self.render_mode == "human":
@@ -226,7 +419,7 @@ class GridWorldEnv(gym.Env):
         radius = 40
         #pygame.draw.circle(self.screen, (245, 242, 245), self._agent_location[0]*pix_square_size_height, 
                                                          #(self._agent_location[1]*pix_square_size_height),radius)
-        # Calculate the center of the grid cell for the agent
+# Calculate the center of the grid cell for the agent
         agent_center_x = (self._agent_location[0]+0.5)*pix_square_size_height
         agent_center_y = (self._agent_location[1]+0.5)*pix_square_size_height
 
@@ -268,7 +461,6 @@ class GridWorldEnv(gym.Env):
 
             # We need to ensure that human-rendering occurs at the predefined framerate.
             # The following line will automatically add a delay to keep the framerate stable.
-
             self.clock.tick(self.metadata["render_fps"])
         else:  # rgb_array
             
@@ -282,3 +474,13 @@ class GridWorldEnv(gym.Env):
         if self.screen is not None:
             pygame.display.quit()
             pygame.quit()
+
+
+
+
+
+
+
+
+
+
